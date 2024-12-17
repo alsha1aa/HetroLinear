@@ -1,0 +1,25 @@
+## This code computes the y-intercept and the slope of a linear regresion under hetrodsedastic measurement errors. 
+### Input: 
+## 1.The n-dimensional vectors of the independent variabe x and the response y.
+## 2. the n-dimensional vectors  of variances of the errors in x, error in y, 
+### and the covariance between the error in x and the error of your.
+
+Ours<-function(x,y,sigmadelta,sigmaeps,sigmadeltaeps)  
+{
+
+xstar<-x-mean(x)   # centering x
+ystar<-y-mean(y)   # centering y
+
+obj<-function(beta)   # the objective function to minimize
+{
+phi<-sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps
+    
+return(sum(xstar^2/phi)^(-1/(n-2))*sum((ystar-beta*xstar)^2/phi)) 
+}
+
+beta  <- optimize(f=obj,interval=c(-200,200))$minimum
+alpha  <- mean(y)-beta*mean(x)   # obtain the estimate of y-intercept, alpha.
+
+return(c(alpha,beta))
+
+}
