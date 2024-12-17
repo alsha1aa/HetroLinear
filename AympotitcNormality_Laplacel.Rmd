@@ -1,0 +1,338 @@
+---
+title: "Asymptotic Normality using Laplace measurement errors"
+author: "Ali Al-Sharadqah, Nicholas Woolsey, Ola Nusierat"
+date: "`r Sys.Date()`"
+output: html_document
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+ 
+## MALS code
+It returns the standardized estimates of the slope of MALS method.
+```{r MALS}
+  MALS <- function(data,sigmadelta,sigmaeps,sigmadeltaeps)
+{
+  #modified least squares
+  n <- length(data)/2;  x <- data[1:n]; y <- data[(n+1):(2*n)]
+  ti <- matrix(cbind(rep(1,n),x), ncol = 2 )
+  h0i <- matrix(cbind(y,x*y), ncol = 2 )
+  hi <- cbind(y,x*y-sigmadeltaeps)
+  tt <- matrix(c(1,mean(ti[,2]), mean(ti[,2] ), mean(ti[,2] * ti[,2]) ), ncol=2, nrow=2)
+  H <- matrix(c(1, mean(x), mean(x), mean(x^2-sigmadelta)), nrow = 2,ncol = 2)
+  Lambda.bar <-  tt - H
+  h.bar <- matrix(c( mean(y), mean(x * y) - mean(sigmadeltaeps) ), ncol = 1, nrow = 2)
+  v.bar <-   apply(ti*y  ,2,mean )-h.bar
+  cc0 <- y%*%ti/n;  cc1 <- matrix(c(mean(y^2), cc0), ncol =1)
+  
+  A <- matrix( cbind(cc1, rbind(cc0,H  )),nrow=3,ncol=3); A<- (A+t(A))/2
+  bb1 <- matrix(c(mean(sigmaeps),  v.bar), nrow=1, ncol=3)
+  bb2 <- matrix( c( t(v.bar), Lambda.bar) ,nrow = 2,ncol = 3)
+  
+  B <- matrix(rbind( bb1,bb2),nrow=3,ncol=3); B<- (B+t(B))/2
+  w <- solve(A)%*%B; w <- (w + t(w) ) /2
+  sols <-  geigen(  B,A,symmetric= FALSE)$values
+  if(length(sols)==0){                 return(c(NA,NA)) }
+  else
+  {
+    lambda<-  max( sols  )#%[which(sols == min(sols))]#if there are real positive solutions
+    
+    alp<-2
+    a<- ifelse( lambda > 1+1/n, (n - alp) /n, lambda * (n - alp )/(n + 1))
+    thetahat <-  solve(tt - a * Lambda.bar) %*% matrix((  matrix(apply(h0i,2,mean),ncol=1) -  v.bar),ncol=1)  #return betahat from paper
+    
+    mals0 <- list()
+    mals0$theta <- thetahat
+    
+    ti2 <- x^2-sigmadelta
+    ab <- 1/sigmaeps
+    a00 <- - n
+    a01 <- - sum(x)
+    a11 <- - sum( (1-a)*x^2  + a* ti2  )
+    An  <- 1/n* matrix(c(a00,a01,a01,a11), ncol=2)
+    
+    D0 <- y - thetahat[1] - thetahat[2] * x
+    Psi1_0 <-   D0
+    Psi2_0 <-  (y - thetahat[1] ) * x - thetahat[2] * ( (1 - a) * x^2 + a * ti2  ) - sigmadeltaeps
+    Bn<- 1/n *matrix(c( sum( Psi1_0^2 ), sum( Psi1_0 * Psi2_0) , sum( Psi1_0 * Psi2_0), sum( Psi2_0^2 ) ), ncol=2 )
+    Cov<- 1/ n * solve(An) %*% Bn %*% t( solve(An) )
+    
+    mals0$Cov <- Cov
+    ODR <- sum(D0^2/(n*(1+thetahat[2]^2)))
+    V<-Cov[2,2]
+    lower<-thetahat[2]-sqrt(V)*1.645
+    upper<-thetahat[2]+sqrt(V)*1.645
+    width<-upper-lower
+    contain<-as.numeric(b < upper & b>lower)
+ 
+    return((thetahat[2]-b)/sqrt(Cov[2,2]))
+  }
+}
+```
+
+
+## Our estimator
+It returns the slope and y-intercept by our method.
+
+```{r ours}
+Ours<-function(data){
+  x<-data[1:n]
+  y<-data[(n+1):(2*n)]
+  sigmadelta<-data[(2*n+1):(3*n)]
+  sigmadeltaeps<-data[(3*n+1):(4*n)]
+  sigmaeps<-data[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  ystar<-y-mean(y)
+  obj<-function(beta){
+    phi<-sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps
+    return(sum(xstar^2/phi)^(-1/(n-2))*sum((ystar-beta*xstar)^2/phi))
+  }
+  beta<-optimize(f=obj,interval=c(-200,200))$minimum
+  alpha<-mean(y)-beta*mean(x)
+  return(c(alpha,beta))
+}
+```
+
+## GLS
+It returns the slope and y-intercept by GLS method.
+
+```{r GLS}
+WLS<-function(data){
+  x<-data[1:n]
+  y<-data[(n+1):(2*n)]
+  sigmadelta<-data[(2*n+1):(3*n)]
+  sigmadeltaeps<-data[(3*n+1):(4*n)]
+  sigmaeps<-data[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  ystar<-y-mean(y)
+  obj<-function(b){
+    phi<-sigmadelta*b^2-2*b*sigmadeltaeps+sigmaeps
+    return(sum((ystar-b*xstar)^2/phi))
+  }
+  beta<-optimize(f=obj,interval=c(-200,200))$minimum
+  alpha<-mean(y)-beta*mean(x)
+  return(c(alpha,beta))
+}
+LS<-function(data){
+  x<-data[1:n]
+  y<-data[(n+1):(2*n)]
+  beta<-lm(y~x)$coefficients[2]
+  return(beta)
+}
+```
+
+## MCS code
+It returns the standardized estimates of MC   method.
+
+```{r MCS}
+MCS  <- function(data,sigmadelta,sigmaeps,sigmadeltaeps){
+  n <- length(data)/2;  x <- data[1:n]; y <- data[(n+1):(2*n)]
+  ti <- cbind(rep(1,n),x)/sqrt(sigmaeps)    #notation is taken from paper
+  yt <- matrix(c(sum(y/sigmaeps),sum(y*x/sigmaeps)), nrow=2)
+  Mt <- t(ti)%*%ti
+  Tt  <- matrix(c(sum(1/sigmaeps),sum(x/sigmaeps),sum(x/sigmaeps),sum((x^2-sigmadelta)/sigmaeps)),nrow=2,ncol=2)
+  V  <- Mt - Tt
+  V <-  (V + t(V) )/2
+  cc1 <- matrix(c( sum(y^2/sigmaeps) , yt), ncol = 1 , nrow = 3)
+  cc2 <- matrix( rbind( t(yt), Mt), nrow = 3 , ncol = 2 )
+  A<- cbind( cc1 , cc2 )
+  A <- (A + t(A) )/2
+  B =matrix(0, nrow=3, ncol=3)
+  B[2:3,2:3] <- V
+  C <- solve(A)%*% B
+  C <- (C+t(C))/2
+  lamb0 <- (1/ eigen(C,only.values = TRUE)$values)
+  lamb <-  min( lamb0[ which(lamb0>0) ] )
+  a <- ifelse(lamb < 1 + 1/n,  lamb*(n-2)/(n+1) ,(n-2)/n )
+  thetahat<-solve(Mt-a*V)%*%yt
+  
+  mcs0 <-list()
+  mcs0$theta <- thetahat
+  
+  ti2 <- x^2 - sigmadelta      ## for Cov Matrix of MCS
+  D0 <- y - thetahat[1] - thetahat[2] * x
+  
+  ab <- 1/sigmaeps
+  a00 <- - sum(ab)
+  a01 <- - sum(x * ab)
+  a11 <- - sum( ( (1-a) * x^2  + a * ti2  ) * ab )
+  
+  An =1/n* matrix( c( a00 , a01 , a01 , a11 ), ncol = 2 )
+  
+  Psi1_0 <-   D0 / sigmaeps
+  Psi2_0 <-  ( ( y - thetahat[1] ) * x- thetahat[2]*( (1 - a) * x^2+ a * ti2  ))*ab
+  
+  Bn= 1/n * matrix(c(sum(Psi1_0^2),sum(Psi1_0 *Psi2_0), sum(Psi1_0 *Psi2_0), sum(Psi2_0^2)), ncol=2 )
+  
+  Cov <- 1/ n * solve(An) %*% Bn %*% t( solve(An) )
+  
+  mcs0$Cov <- Cov
+  mcs0$ODR <- sum(D0^2/(n*(1+thetahat[2]^2)))
+  
+  lower<-thetahat[2]-sqrt(Cov[2,2])*1.645
+  upper<-thetahat[2]+sqrt(Cov[2,2])*1.645
+  width<-upper-lower
+  contain<-as.numeric(b < upper & b>lower)
+ 
+  return((thetahat[2]-b)/sqrt(Cov[2,2]))
+}
+
+```
+
+## covariance matrix of GLS and our method
+It retuns the estimates of the covarinance matrix of oir method and GLS.
+
+```{r Va}
+
+
+Va<-function(dat,model){
+  x<-dat[1:n]
+  y<-dat[(n+1):(2*n)]
+  sigmadelta<-dat[(2*n+1):(3*n)]
+  sigmadeltaeps<-dat[(3*n+1):(4*n)]
+  sigmaeps<-dat[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  if(model=="novel"){
+    par<-Ours(dat)
+    alpha<-par[1]
+    beta<-par[2]
+    hi<-1/(sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps)
+    hprime<-2*(sigmadeltaeps-beta*sigmadelta)/(beta^2*sigmadelta-2*beta*sigmadeltaeps+sigmaeps)^2
+    hpp<-(8*sigmadeltaeps^2-2*(6*beta*sigmadeltaeps+sigmaeps)*sigmadelta+6*beta^2*sigmadelta^2)/(beta^2*sigmadelta+sigmaeps-2*beta*sigmadeltaeps)^3
+    di<-y-alpha-beta*x
+    Sh<-sum(xstar^2*hi)#might need to be xstar
+    Shprime<-sum(xstar^2*hprime)
+    Shp<-Shprime
+    Shpp<-sum(xstar^2*hpp)
+    dfa<- -2*Sh^(-1/(n-2))*hi*di
+    dfb<- -2*x*di*hi*Sh^(-1/(n-2))+di^2*Sh^(-1/(n-2))*hprime-di^2*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    dfbb<- 2*x^2*hi*Sh^(-1/(n-2))-4*x*di*Sh^(-1/(n-2))*hprime+4*x*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)-2*di^2*Sh^(-1-1/(n-2))*hprime*Shprime/(n-2)-(-1-1/(n-2))*di^2*hi*Sh^(-2-1/(n-2))*Shprime^2/(n-2)+di^2*Sh^(-1/(n-2))*hpp-di^2*hi*Sh^(-1-1/(n-2))*Shpp/(n-2)
+    dfaa<- 2*Sh^(-1/(n-2))*hi
+    dfba<- 2*x*hi*Sh^(-1/(n-2))-2*di*Sh^(-1/(n-2))*hprime+2*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    B<-matrix(rep(0,4),nrow=2,ncol=2)
+    A<-matrix(rep(0,4),nrow=2,ncol=2)
+    for(i in 1:n){
+      B<-B+c(dfa[i],dfb[i])%*%t(c(dfa[i],dfb[i]))/n
+      A<-A+matrix(c(dfaa[i],dfba[i],dfba[i],dfbb[i]),nrow=2,ncol=2)/n
+    }
+    V<- solve(A)%*%B%*%t(solve(A))/n
+  }
+  if(model=="WLS"){
+    par<-WLS(dat)
+    alpha<-par[1]
+    beta<-par[2]
+    di<-y-alpha-beta*x
+    hi<-1/(sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps)
+    hprime<-2*(sigmadeltaeps-beta*sigmadelta)/(beta^2*sigmadelta-2*beta*sigmadeltaeps+sigmaeps)^2
+    hpp<-(8*sigmadeltaeps^2-2*(6*beta*sigmadeltaeps+sigmaeps)*sigmadelta+6*beta^2*sigmadelta^2)/(beta^2*sigmadelta+sigmaeps-2*beta*sigmadeltaeps)^3
+    Sh<-1
+    Shprime<-0
+    Shp<-Shprime
+    Shpp<-0
+    dfa<- -2*Sh^(-1/(n-2))*hi*di
+    dfb<- -1/(n-2)*Sh^(-(n-1)/(n-2))*Shprime*hi*di^2+Sh^(-1/(n-2))*(-2*hi*di*x+hprime*di^2)
+    dfbb<- 1/(n-2)*(n-1)/(n-2) *Sh^(-(n-1)/(n-2)-1)*Shp^2 * hi*di^2 - 1/(n-2)*Sh^(-(n-1)/(n-2))*Shpp*hi*di^2-2/(n-2)*Sh^(-1/(n-2)-1)*Shp*(-2*hi*di*x+hprime*di^2)+Sh^(-1/(n-2))*(-2*hprime*di*x+2*hi*x^2+hpp*di^2-2*hprime*di*x)
+    dfaa<- 2*Sh^(-1/(n-2))*hi
+    dfba<- Sh^(-1/(n-2))*(2*x*hi-2*di*hprime)+2*di*hi*Sh^(-(n-1)/(n-2))*Shp/(n-2)
+    B<-matrix(rep(0,4),nrow=2,ncol=2)
+    A<-matrix(rep(0,4),nrow=2,ncol=2)
+    for(i in 1:n){
+      B<-B+c(dfa[i],dfb[i])%*%t(c(dfa[i],dfb[i]))/n
+      A<-A+matrix(c(dfaa[i],dfba[i],dfba[i],dfbb[i]),nrow=2,ncol=2)/n
+    }
+    V<- solve(A)%*%B%*%t(solve(A))/n
+  }
+  return((beta-b)/sqrt(V[2,2]))
+}
+
+```
+
+
+## Error generation under normal me errors
+It generates the errors for correlated and uncorrelated Laplace errors
+
+```{r errors}
+library(RConics)
+library(mvtnorm)
+library(latex2exp)
+library(LaplacesDemon)
+library(geigen)
+errors<-function(xi,sigma){#generates a list of errors and their variances
+  sigmadeltas<-abs(sin(pi*xi))*sigma+.05#have to perturb this slightly to not divide by 0
+  rho<-abs(cos(pi*xi))*.4
+  lambda<-abs(xi)*.6+1
+  sigmaepsdelta<-rep(0,length(sigmadeltas))              # Uncorrelated
+  #sigmaepsdelta<-sqrt(sigmadeltas)*rho*sqrt(lambda)    # Correlated
+  for(j in 1:n){#this is needed to keep the covariance matrix positive definite
+    sigmaepsdelta[j]<-min(abs(sigmadeltas[j]/2),abs(sigmaepsdelta[j]))
+  }
+  sigmaeps<-sigmadeltas*lambda+.05
+  delta<-c()
+  eps<-c()
+  for(i in 1:n){
+    temp<-rmvl(samp,mu=c(0,0),Sigma=matrix(c(sigmadeltas[i],sigmaepsdelta[i],sigmaepsdelta[i],sigmaeps[i]),nrow=2,ncol=2))
+     delta<-rbind(delta,temp[,1])
+    eps<-rbind(eps,temp[,2])
+  }
+  out<-list(delta=delta,eps=eps,sigmadeltas=sigmadeltas,sigmaepsdelta=sigmaepsdelta,sigmaeps=sigmaeps)
+  return(out)
+}
+```
+
+## Monte Carlo simulation
+This parts simulates the data and computes the estimates of the stanardized estimates of the four methods.
+
+
+
+```{r Monte carlo with plots}
+par(mfrow=c(4,4),mar=c(2,1,2,1),font.axis=2,cex.lab=1.5,cex.main=1.2) 
+
+set.seed(1)
+samp<-10000
+ns<-c(20,40,80,120)
+a=.25
+b=.8
+sigmas<-c(.02,.1,.2,.33)
+for(sigma in sigmas){
+  for(n in ns){
+    xi<-seq(0,1,1/(n-1))
+    err<-errors(xi,sigma)
+    x<-matrix(xi,nrow=n,ncol=samp)+err$delta
+    y<-a+b*matrix(xi,nrow=n,ncol=samp)+err$eps
+    data<-rbind(x,y, matrix(err$sigmadeltas,nrow=n,ncol=samp), matrix(err$sigmaepsdelta,nrow=n,ncol=samp), matrix(err$sigmaeps,nrow=n,ncol=samp))
+    new<-apply(data,2,Va,model="novel")
+    wls<-apply(data,2,Va,model="WLS")
+    mcs<-apply(rbind(x,y),2,MCS,sigmadelta=err$sigmadeltas,sigmadeltaeps=err$sigmaepsdelta,sigmaeps=err$sigmaeps)
+    mals<-apply(rbind(x,y),2,MALS,sigmadelta=err$sigmadeltas,sigmadeltaeps=err$sigmaepsdelta,sigmaeps=err$sigmaeps)
+    if(n==20){
+      plot(NULL,xlim=c(-5,5),ylim=c(0,.6),ylab="",xlab=TeX(r'($z_{\hat{\beta}}$)'),yaxt='n')
+      title(main=paste("n = ", n), line=0.25)
+      lines(density(new),col="blue",lwd=2)
+      lines(density(wls),col="black",lwd=2)
+      lines(density(mcs),col="darkgreen",lwd=2)
+      lines(density(mals),col="red",lwd=2)
+      u<-seq(-5,5,.01)
+      lines(u,dnorm(u),lty=1)
+      if(sigma==.02){legend(x=-5,y=.6,legend=c(as.expression(bquote(bold("MALS"))),bquote(bold('GLS') ),bquote(bold('MCS')),bquote(bold('Proposed'))), col=c('red', 'black','darkgreen','blue'),lwd=4, cex=0.45,box.lty=0 )}
+    }else{
+      plot(NULL,xlim=c(-5,5),ylim=c(0,.6),ylab="",xlab=TeX(r'($z_{\hat{\beta}}$)'),yaxt='n')
+      title(main=paste("n = ", n), line=0.25)
+      lines(density(new),col="blue",lwd=2)
+      lines(density(wls),col="black",lwd=2)
+      lines(density(mcs),col="darkgreen",lwd=2)
+      lines(density(mals),col="red",lwd=2)
+      u<-seq(-5,5,.01)
+      lines(u,dnorm(u),lty=1)
+    }
+    
+  }
+}
+mtext(TeX(paste0("$\\bar{\\sigma}_{\\delta}=$", 0.02)), side=3,line=-1.7,outer=TRUE,cex=.9)
+mtext(TeX(paste0("$\\bar{\\sigma}_{\\delta}=$", 0.1)), side=3,line=-14.5,outer=TRUE,cex=.9)
+mtext(TeX(paste0("$\\bar{\\sigma}_{\\delta}=$", 0.2)), side=3,line=-27.5,outer=TRUE,cex=.9)
+mtext(TeX(paste0("$\\bar{\\sigma}_{\\delta}=$", 0.33)), side=3,line=-40,outer=TRUE,cex=.9)
+
+```

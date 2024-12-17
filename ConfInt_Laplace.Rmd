@@ -1,0 +1,477 @@
+---
+title: "Confidence Interval using Laplace errors"
+author: "Ali Al-Sharadqah, Nicholas Woolsey, Ola Nusierat"
+date: "`r Sys.Date()`"
+output: html_document
+---
+ 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This code generates the plots in the papers (Figures 13-14) for laplace case. See the last section on how to modify to get the other figure.
+
+
+
+```{r func}
+library(geigen)
+library(LaplacesDemon)
+library(RConics)
+library(mvtnorm) 
+
+```
+
+## MCS code
+It computes MCS of the y-intercept and slope.
+Input: $n\times 2$ matrix of data $[x, y]$, the vectors of $\sigma_{\delta_i}^2$,  $\sigma_{\epsilon_i}^2$,  $\sigma_{\delta_i\epsilon_i}$.
+Output: The y-intercept and slope. 
+
+```{r MCS}
+
+
+MCS  <- function(data,sigmadelta,sigmaeps,sigmadeltaeps){#MCS
+  n <- length(data)/2;  x <- data[1:n]; y <- data[(n+1):(2*n)]
+  ti <- cbind(rep(1,n),x)/sqrt(sigmaeps)    #notation is taken from paper
+  yt <- matrix(c(sum(y/sigmaeps),sum(y*x/sigmaeps)), nrow=2)
+  Mt <- t(ti)%*%ti
+  Tt  <- matrix(c(sum(1/sigmaeps),sum(x/sigmaeps),sum(x/sigmaeps),sum((x^2-sigmadelta)/sigmaeps)),nrow=2,ncol=2)
+  V  <- Mt - Tt
+  V <-  (V + t(V) )/2
+  cc1 <- matrix(c( sum(y^2/sigmaeps) , yt), ncol = 1 , nrow = 3)
+  cc2 <- matrix( rbind( t(yt), Mt), nrow = 3 , ncol = 2 )
+  A<- cbind( cc1 , cc2 )
+  A <- (A + t(A) )/2
+  B =matrix(0, nrow=3, ncol=3)
+  B[2:3,2:3] <- V
+  C <- solve(A)%*% B
+  C <- (C+t(C))/2
+  lamb0 <- (1/ eigen(C,only.values = TRUE)$values)
+  lamb <-  min( lamb0[ which(lamb0>0) ] )
+  a <- ifelse(lamb < 1 + 1/n,  lamb*(n-2)/(n+1) ,(n-2)/n )
+  thetahat<-solve(Mt-a*V)%*%yt
+  
+  mcs0 <-list()
+  mcs0$theta <- thetahat
+  
+  ti2 <- x^2 - sigmadelta      ## for Cov Matrix of MCS
+  D0 <- y - thetahat[1] - thetahat[2] * x
+  
+  ab <- 1/sigmaeps
+  a00 <- - sum(ab)
+  a01 <- - sum(x * ab)
+  a11 <- - sum( ( (1-a) * x^2  + a * ti2  ) * ab )
+  
+  An =1/n* matrix( c( a00 , a01 , a01 , a11 ), ncol = 2 )
+  
+  Psi1_0 <-   D0 / sigmaeps
+  Psi2_0 <-  ( ( y - thetahat[1] ) * x- thetahat[2]*( (1 - a) * x^2+ a * ti2  ))*ab
+  
+  Bn= 1/n * matrix(c(sum(Psi1_0^2),sum(Psi1_0 *Psi2_0), sum(Psi1_0 *Psi2_0), sum(Psi2_0^2)), ncol=2 )
+  
+  Cov <- 1/ n * solve(An) %*% Bn %*% t( solve(An) )
+  
+  mcs0$Cov <- Cov
+  mcs0$ODR <- sum(D0^2/(n*(1+thetahat[2]^2)))
+
+  lower<-thetahat[2]-sqrt(Cov[2,2])*1.645
+  upper<-thetahat[2]+sqrt(Cov[2,2])*1.645
+  width<-upper-lower
+  contain<-as.numeric(b < upper & b>lower)
+
+  return((thetahat[2]-b)/sqrt(Cov[2,2]))
+}
+
+
+```
+
+
+## GLS code
+It computes GLS of the y-intercept and slope, and its variance and 90% CI.
+Input: $n\times 2$ matrix of data $[x, y]$, the vectors of $\sigma_{\delta_i}^2$,  $\sigma_{\epsilon_i}^2$,  $\sigma_{\delta_i\epsilon_i}$.
+Output: The estimates of paramters. 
+
+```{r GLS}
+
+WLS<-function(data){#weighted least squares
+  x<-data[1:n]
+  y<-data[(n+1):(2*n)]
+  sigmadelta<-data[(2*n+1):(3*n)]
+  sigmadeltaeps<-data[(3*n+1):(4*n)]
+  sigmaeps<-data[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  ystar<-y-mean(y)
+  obj<-function(b){
+    phi<-sigmadelta*b^2-2*b*sigmadeltaeps+sigmaeps
+    return(sum((ystar-b*xstar)^2/phi))
+  }
+  beta<-optimize(f=obj,interval=c(-200,200))$minimum
+  alpha<-mean(y)-beta*mean(x)
+  return(c(alpha,beta))
+}
+```
+
+## Our method code
+It computes our method of the y-intercept and slope.
+Input: $n\times 2$ matrix of data $[x, y]$, the vectors of $\sigma_{\delta_i}^2$,  $\sigma_{\epsilon_i}^2$,  $\sigma_{\delta_i\epsilon_i}$.
+Output: The estimates of parameters. 
+
+```{r Ours}
+Ours<-function(data){#Our method
+  x<-data[1:n]
+  y<-data[(n+1):(2*n)]
+  sigmadelta<-data[(2*n+1):(3*n)]
+  sigmadeltaeps<-data[(3*n+1):(4*n)]
+  sigmaeps<-data[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  ystar<-y-mean(y)
+  obj<-function(beta){
+    phi<-sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps
+    return(sum(xstar^2/phi)^(-1/(n-2))*sum((ystar-beta*xstar)^2/phi))
+  }
+  beta<-optimize(f=obj,interval=c(-200,200))$minimum
+  alpha<-mean(y)-beta*mean(x)
+  return(c(alpha,beta))
+}
+
+```
+
+## Confidence Code for GLS and our method
+This function takes the data and the model to compute the width and coverage of all methods. MALS is computed inside the code.
+
+Input: data and model.
+output: The coverage and the width of a confidence interval.
+
+```{r Confidence}
+
+
+conf<-function(dat,model){#Function that generates 90% confidence intervals
+  x<-dat[1:n]
+  y<-dat[(n+1):(2*n)]
+  sigmadelta<-dat[(2*n+1):(3*n)]
+  sigmadeltaeps<-dat[(3*n+1):(4*n)]
+  sigmaeps<-dat[(4*n+1):(5*n)]
+  xstar<-x-mean(x)
+  if(model=="novel"){#novel=our method
+    par<-Ours(dat)
+    alpha<-par[1]
+    beta<-par[2]
+    hi<-1/(sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps)
+    hprime<-2*(sigmadeltaeps-beta*sigmadelta)/(beta^2*sigmadelta-2*beta*sigmadeltaeps+sigmaeps)^2
+    hpp<-(8*sigmadeltaeps^2-2*(6*beta*sigmadeltaeps+sigmaeps)*sigmadelta+6*beta^2*sigmadelta^2)/(beta^2*sigmadelta+sigmaeps-2*beta*sigmadeltaeps)^3
+    di<-y-alpha-beta*x
+    Sh<-sum(xstar^2*hi)#might need to be xstar
+    Shprime<-sum(xstar^2*hprime)
+    Shp<-Shprime
+    Shpp<-sum(xstar^2*hpp)
+    dfa<- -2*Sh^(-1/(n-2))*hi*di
+    dfb<- -2*x*di*hi*Sh^(-1/(n-2))+di^2*Sh^(-1/(n-2))*hprime-di^2*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    dfbb<- 2*x^2*hi*Sh^(-1/(n-2))-4*x*di*Sh^(-1/(n-2))*hprime+4*x*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)-2*di^2*Sh^(-1-1/(n-2))*hprime*Shprime/(n-2)-(-1-1/(n-2))*di^2*hi*Sh^(-2-1/(n-2))*Shprime^2/(n-2)+di^2*Sh^(-1/(n-2))*hpp-di^2*hi*Sh^(-1-1/(n-2))*Shpp/(n-2)
+    dfaa<- 2*Sh^(-1/(n-2))*hi
+    dfba<- 2*x*hi*Sh^(-1/(n-2))-2*di*Sh^(-1/(n-2))*hprime+2*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    B<-matrix(rep(0,4),nrow=2,ncol=2)
+    A<-matrix(rep(0,4),nrow=2,ncol=2)
+    for(i in 1:n){
+      B<-B+c(dfa[i],dfb[i])%*%t(c(dfa[i],dfb[i]))/n
+      A<-A+matrix(c(dfaa[i],dfba[i],dfba[i],dfbb[i]),nrow=2,ncol=2)/n
+    }
+    V<- solve(A)%*%B%*%t(solve(A))/n
+    V<-V[2,2]
+    lower<-beta-sqrt(V)*1.645
+    upper<-beta+sqrt(V)*1.645
+  }
+  if(model=="WLS"){#WLS=GLS
+    par<-WLS(dat)
+    alpha<-par[1]
+    beta<-par[2]
+    di<-y-alpha-beta*x
+    hi<-1/(sigmadelta*beta^2-2*beta*sigmadeltaeps+sigmaeps)
+    hprime<-2*(sigmadeltaeps-beta*sigmadelta)/(beta^2*sigmadelta-2*beta*sigmadeltaeps+sigmaeps)^2
+    hpp<-2*(3*beta^2*sigmadelta^2-6*beta*sigmadelta*sigmadeltaeps+4*sigmadeltaeps^2-sigmadelta*sigmaeps)*hi^3
+    di<-y-alpha-beta*x
+    Sh<-1
+    Shprime<-0
+    Shp<-Shprime
+    Shpp<-0
+    dfa<- -2*Sh^(-1/(n-2))*hi*di
+    dfb<- -2*x*di*hi*Sh^(-1/(n-2))+di^2*Sh^(-1/(n-2))*hprime-di^2*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    dfbb<- 2*x^2*hi*Sh^(-1/(n-2))-4*x*di*Sh^(-1/(n-2))*hprime+4*x*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)-2*di^2*Sh^(-1-1/(n-2))*hprime*Shprime/(n-2)-(-1-1/(n-2))*di^2*hi*Sh^(-2-1/(n-2))*Shprime^2/(n-2)+di^2*Sh^(-1/(n-2))*hpp-di^2*hi*Sh^(-1-1/(n-2))*Shpp/(n-2)
+    dfaa<- 2*Sh^(-1/(n-2))*hi
+    dfba<- 2*x*hi*Sh^(-1/(n-2))-2*di*Sh^(-1/(n-2))*hprime+2*di*hi*Sh^(-1-1/(n-2))*Shprime/(n-2)
+    B<-matrix(rep(0,4),nrow=2,ncol=2)
+    A<-matrix(rep(0,4),nrow=2,ncol=2)
+    for(i in 1:n){
+      B<-B+c(dfa[i],dfb[i])%*%t(c(dfa[i],dfb[i]))/n
+      A<-A+matrix(c(dfaa[i],dfba[i],dfba[i],dfbb[i]),nrow=2,ncol=2)/n
+    }
+    V<- solve(A)%*%B%*%t(solve(A))/n
+    V<-V[2,2]
+    lower<-beta-sqrt(V)*1.645
+    upper<-beta+sqrt(V)*1.645
+  }
+  if(model=="MCS"){
+    ti <- cbind(rep(1,n),x)/sqrt(sigmaeps)    #notation is taken from paper
+    yt <- matrix(c(sum(y/sigmaeps),sum(y*x/sigmaeps)), nrow=2)
+    Mt <- t(ti)%*%ti
+    Tt  <- matrix(c(sum(1/sigmaeps),sum(x/sigmaeps),sum(x/sigmaeps),sum((x^2-sigmadelta)/sigmaeps)),nrow=2,ncol=2)
+    V  <- Mt - Tt
+    V <-  (V + t(V) )/2
+    cc1 <- matrix(c( sum(y^2/sigmaeps) , yt), ncol = 1 , nrow = 3)
+    cc2 <- matrix( rbind( t(yt), Mt), nrow = 3 , ncol = 2 )
+    A<- cbind( cc1 , cc2 )
+    A <- (A + t(A) )/2
+    B =matrix(0, nrow=3, ncol=3)
+    B[2:3,2:3] <- V
+    C <- solve(A)%*% B
+    C <- (C+t(C))/2
+    lamb0 <- (1/ eigen(C,only.values = TRUE)$values)
+    lamb <-  min( lamb0[ which(lamb0>0) ] )
+    a <- ifelse(lamb < 1 + 1/n,  lamb*(n-2)/(n+1) ,(n-2)/n )
+    thetahat<-solve(Mt-a*V)%*%yt
+    
+    mcs0 <-list()
+    mcs0$theta <- thetahat
+    
+    ti2 <- x^2 - sigmadelta      ## for Cov Matrix of MCS
+    D0 <- y - thetahat[1] - thetahat[2] * x
+    
+    ab <- 1/sigmaeps
+    a00 <- - sum(ab)
+    a01 <- - sum(x * ab)
+    a11 <- - sum( ( (1-a) * x^2  + a * ti2  ) * ab )
+    
+    An =1/n* matrix( c( a00 , a01 , a01 , a11 ), ncol = 2 )
+    
+    Psi1_0 <-   D0 / sigmaeps
+    Psi2_0 <-  ( ( y - thetahat[1] ) * x- thetahat[2]*( (1 - a) * x^2+ a * ti2  ))*ab
+    
+    Bn= 1/n * matrix(c(sum(Psi1_0^2),sum(Psi1_0 *Psi2_0), sum(Psi1_0 *Psi2_0), sum(Psi2_0^2)), ncol=2 )
+    
+    Cov <- 1/ n * solve(An) %*% Bn %*% t( solve(An) )
+    
+    mcs0$Cov <- Cov
+    mcs0$ODR <- sum(D0^2/(n*(1+thetahat[2]^2)))
+    
+    #return(c(thetahat,Cov[2,2], ODR))
+    #return(c(thetahat,Cov[2,2]))
+    lower<-thetahat[2]-sqrt(Cov[2,2])*1.645
+    upper<-thetahat[2]+sqrt(Cov[2,2])*1.645
+  }
+  if(model=="MALS"){
+    ti <- matrix(cbind(rep(1,n),x), ncol = 2 )
+    h0i <- matrix(cbind(y,x*y), ncol = 2 )
+    hi <- cbind(y,x*y-sigmadeltaeps)
+    tt <- matrix(c(1,mean(ti[,2]), mean(ti[,2] ), mean(ti[,2] * ti[,2]) ), ncol=2, nrow=2)
+    H <- matrix(c(1, mean(x), mean(x), mean(x^2-sigmadelta)), nrow = 2,ncol = 2)
+    Lambda.bar <-  tt - H
+    h.bar <- matrix(c( mean(y), mean(x * y) - mean(sigmadeltaeps) ), ncol = 1, nrow = 2)
+    v.bar <-   apply(ti*y  ,2,mean )-h.bar
+    cc0 <- y%*%ti/n;  cc1 <- matrix(c(mean(y^2), cc0), ncol =1)
+    
+    A <- matrix( cbind(cc1, rbind(cc0,H  )),nrow=3,ncol=3); A<- (A+t(A))/2
+    bb1 <- matrix(c(mean(sigmaeps),  v.bar), nrow=1, ncol=3)
+    bb2 <- matrix( c( t(v.bar), Lambda.bar) ,nrow = 2,ncol = 3)
+    
+    B <- matrix(rbind( bb1,bb2),nrow=3,ncol=3); B<- (B+t(B))/2
+    w <- solve(A)%*%B; w <- (w + t(w) ) /2
+    sols <-  geigen(  B,A,symmetric= FALSE)$values
+    if(length(sols)==0){                 return(c(NA,NA)) }
+    else
+    {
+      lambda<-  max( sols  )#%[which(sols == min(sols))]#if there are real positive solutions
+      
+      alp<-2
+      a<- ifelse( lambda > 1+1/n, (n - alp) /n, lambda * (n - alp )/(n + 1))
+      thetahat <-  solve(tt - a * Lambda.bar) %*% matrix((  matrix(apply(h0i,2,mean),ncol=1) -  v.bar),ncol=1)  #return betahat from paper
+      
+      mals0 <- list()
+      mals0$theta <- thetahat
+      
+      ti2 <- x^2-sigmadelta
+      ab <- 1/sigmaeps
+      a00 <- - n
+      a01 <- - sum(x)
+      a11 <- - sum( (1-a)*x^2  + a* ti2  )
+      An  <- 1/n* matrix(c(a00,a01,a01,a11), ncol=2)
+      
+      D0 <- y - thetahat[1] - thetahat[2] * x
+      Psi1_0 <-   D0
+      Psi2_0 <-  (y - thetahat[1] ) * x - thetahat[2] * ( (1 - a) * x^2 + a * ti2  ) - sigmadeltaeps
+      Bn<- 1/n *matrix(c( sum( Psi1_0^2 ), sum( Psi1_0 * Psi2_0) , sum( Psi1_0 * Psi2_0), sum( Psi2_0^2 ) ), ncol=2 )
+      Cov<- 1/ n * solve(An) %*% Bn %*% t( solve(An) )
+      
+      mals0$Cov <- Cov
+      ODR <- sum(D0^2/(n*(1+thetahat[2]^2)))
+      V<-Cov[2,2]
+      lower<-thetahat[2]-sqrt(V)*1.645
+      upper<-thetahat[2]+sqrt(V)*1.645
+    }
+  }
+  coverage<- as.numeric(b>lower & b< upper)
+  width<-upper-lower
+  return(c(coverage,width))
+}
+
+```
+## Errors 
+This function general laplace errors.  
+
+```{r errors}
+  errors<-function(xi,sigma)
+    { #generates a list of errors and their variances
+  sigmadeltas<-abs(sin(pi*xi))*sigma+.05#have to perturb this slightly to not divide by 0
+  rho<-abs(cos(pi*xi))*.4
+  lambda<-abs(xi)*.6+1
+ 
+   sigmaepsdelta<-rep(0,length(sigmadeltas))                # This will make it uncorrelated
+  #sigmaepsdelta<-sqrt(sigmadeltas)*rho*sqrt(lambda)         # This will make it Correlated
+ 
+    for(j in 1:n){#this is needed to keep the covariance matrix positive definite
+    sigmaepsdelta[j]<-min(abs(sigmadeltas[j]/2),abs(sigmaepsdelta[j]))
+    }
+  sigmaeps<-sigmadeltas*lambda+.05
+  delta<-c()
+  eps<-c()
+  for(i in 1:n)
+    { 
+    temp<-rmvl(samp,mu=c(0,0),Sigma=matrix(c(sigmadeltas[i],sigmaepsdelta[i],sigmaepsdelta[i],sigmaeps[i]),nrow=2,ncol=2)) 
+
+    delta<-rbind(delta,temp[,1])
+    eps<-rbind(eps,temp[,2])
+    
+  }
+  
+  out<-list(delta=delta,eps=eps,sigmadeltas=sigmadeltas,sigmaepsdelta=sigmaepsdelta,sigmaeps=sigmaeps)
+  
+  return(out)
+
+  }
+```
+
+## Main MonteCarlo Simulation
+This is the main part of the code. It simulate the data and computes the average width and coverage of $\beta$ using the four methods and for different values of $n=(100, 200,500,1000$. 
+``` {r MonteCarlo}
+set.seed(1)
+samp<-10000 
+#ns<-c(30,60,120)
+a=.25
+b=.8
+newwidthtotal<-c()
+newcovtotal<-c()
+wlswidthtotal<-c()
+wlscovtotal<-c()
+malscovtotal<-c()
+malswidthtotal<-c()
+mcswidthtotal<-c()
+mcscovtotal<-c()
+ns<-c(100,200,500,1000)
+sigmas<-seq(.05,.4,.05)#Look at errors function to choose correlated/uncorrelated and normal/laplace
+for( n in ns){
+  newwidth<-c()
+  newcov<-c()
+  wlswidth<-c()
+  wlscov<-c()
+  malscov<-c()
+  malswidth<-c()
+  mcswidth<-c()
+  mcscov<-c()
+  for(sigma in sigmas){
+    xi<-seq(0,1,1/(n-1))
+    err<-errors(xi,sigma)
+    x<-matrix(xi,nrow=n,ncol=samp)+err$delta
+    y<-a+b*matrix(xi,nrow=n,ncol=samp)+err$eps
+    data<-rbind(x,y, matrix(err$sigmadeltas,nrow=n,ncol=samp), matrix(err$sigmaepsdelta,nrow=n,ncol=samp), matrix(err$sigmaeps,nrow=n,ncol=samp))
+    new<-apply(data,2,conf,model="novel")
+    wls<-apply(data,2,conf,model="WLS")
+    mcs<-apply(data,2,conf,model="MCS")
+    mals<-apply(data,2,conf,model="MALS")
+    newwidth<-c(newwidth,mean(new[2,]))
+    newcov<-c(newcov,mean(new[1,]))
+    wlswidth<-c(wlswidth,mean(wls[2,]))
+    wlscov<-c(wlscov,mean(wls[1,]))
+    malswidth<-c(malswidth,mean(mals[2,]))
+    malscov<-c(malscov,mean(mals[1,]))
+    mcswidth<-c(mcswidth,mean(mcs[2,]))
+    mcscov<-c(mcscov,mean(mcs[1,]))
+   }
+   newwidthtotal<-cbind(newwidthtotal,newwidth)
+  newcovtotal<-cbind(newcovtotal,newcov)
+  wlswidthtotal<-cbind(wlswidthtotal,wlswidth)
+  wlscovtotal<-cbind(wlscovtotal,wlscov)
+  malscovtotal<-cbind(malscovtotal,malscov)
+  malswidthtotal<-cbind(malswidthtotal,malswidth)
+  mcswidthtotal<-cbind(mcswidthtotal,mcswidth)
+  mcscovtotal<-cbind(mcscovtotal,mcscov)
+}
+```
+
+
+## Plots for the  width of the 90% CI of $\beta$ 
+
+This part of the code plots  the avarage width of the 90% CI of $\beta$ the versus $\sigma$ for four values of $n=100,200,500,1000$. 
+
+
+```{r plots}
+
+par(mfrow=c(2,2),mar=c(4.8,4.8,2.2,2),font.axis=2,cex.lab=1.9,cex.main=1.5)
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(0.55,2.5),main="n=100",ylab=quote(bold('CI Width')),xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newwidthtotal[,1],col="blue",lwd=3)
+lines(sigmas,wlswidthtotal[,1],col="black",lwd=3)
+lines(sigmas,mcswidthtotal[,1],col="darkgreen",lwd=3)
+lines(sigmas,malswidthtotal[,1],col="red",lwd=3)
+#legend(x=.04,y=0.6,legend=c(as.expression(bquote(bold("MALS"))),bquote(bold('GLS') ),bquote(bold('MCS')),bquote(bold('Proposed'))), col=c('red', 'black','darkgreen','blue'),lwd=4, cex=0.7,box.lty=0 )
+
+
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.35,2),main="n=200",ylab=quote(bold('CI Width')), xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newwidthtotal[,2],col="blue",lwd=3)
+lines(sigmas,wlswidthtotal[,2],col="black",lwd=3)
+lines(sigmas,mcswidthtotal[,2],col="darkgreen",lwd=3)
+lines(sigmas,malswidthtotal[,2],col="red",lwd=3)
+
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.25,1),main="n=500", ylab=quote(bold('CI Width')) , xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newwidthtotal[,3],col="blue",lwd=3)
+lines(sigmas,wlswidthtotal[,3],col="black",lwd=3)
+lines(sigmas,mcswidthtotal[,3],col="darkgreen",lwd=3)
+lines(sigmas,malswidthtotal[,3],col="red",lwd=3)
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.18,0.8),main="n=1000", ylab=quote(bold('CI Width')), xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newwidthtotal[,4],col="blue",lwd=3)
+lines(sigmas,wlswidthtotal[,4],col="black",lwd=3)
+lines(sigmas,mcswidthtotal[,4],col="darkgreen",lwd=3)
+lines(sigmas,malswidthtotal[,4],col="red",lwd=3)
+```
+
+## ## Plots for the coverage of the 90% CI of $\beta$ 
+
+This part of the code plots the computed the average coverage  of the 90% CI of $\beta$ the versus $\sigma$ for four values of $n=100,200,500,1000$. 
+
+
+```{r plot_Coverage}
+
+par(mfrow=c(2,2),mar=c(4.8,4.8,2.2,2),font.axis=2,cex.lab=1.9,cex.main=1.5)
+
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.85,1.05),main="n=100",ylab=quote(bold('CI Covg')), xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newcovtotal[,1],col="blue",lwd=3)
+lines(sigmas,wlscovtotal[,1],col="black",lwd=3)
+lines(sigmas,mcscovtotal[,1],col="darkgreen",lwd=3)
+lines(sigmas,malscovtotal[,1],col="red",lwd=3)
+abline(h=.9,lty=2)
+legend(x=.04,y=1.05,legend=c(as.expression(bquote(bold("MALS"))),bquote(bold('GLS') ),bquote(bold('MCS')),bquote(bold('Proposed'))), col=c('red', 'black','darkgreen','blue'),lwd=4, cex=0.8,box.lty=0 )
+
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.85,1),main="n=200",ylab=quote(bold('Covg')), xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newcovtotal[,2],col="blue",lwd=3)
+lines(sigmas,wlscovtotal[,2],col="black",lwd=3)
+lines(sigmas,mcscovtotal[,2],col="darkgreen",lwd=3)
+lines(sigmas,malscovtotal[,2],col="red",lwd=3)
+abline(h=.9,lty=2)
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.85,1),main="n=500",ylab=quote(bold('Covg')) , xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newcovtotal[,3],col="blue",lwd=3)
+lines(sigmas,wlscovtotal[,3],col="black",lwd=3)
+lines(sigmas,mcscovtotal[,3],col="darkgreen",lwd=3)
+lines(sigmas,malscovtotal[,3],col="red",lwd=3)
+abline(h=.9,lty=2)
+plot(NULL,xlim=c(min(sigmas),max(sigmas)),ylim=c(.85,1),main="n=1000",ylab=quote(bold('Covg')), xlab = expression(paste(bold(sigma)[epsilon])))
+lines(sigmas,newcovtotal[,4],col="blue",lwd=3)
+lines(sigmas,wlscovtotal[,4],col="black",lwd=3)
+lines(sigmas,mcscovtotal[,4],col="darkgreen",lwd=3)
+lines(sigmas,malscovtotal[,4],col="red",lwd=3)
+abline(h=.9,lty=2)
+
+```

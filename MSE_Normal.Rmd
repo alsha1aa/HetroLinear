@@ -1,0 +1,305 @@
+---
+title: "Computing the MSE when errors are Normal Distributed"
+author: "Ali Al-Sharadqah, Nicholas Woolsey, Ola Nusierat"
+date: '`r Sys.Date()`'
+date: "`r Sys.Date()`"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code generates Figures 1-3 for the normal error case. You need to change the setting to generate all figures as described below.
+
+#### MALS Code
+
+This code to compute the slope using MALS method.
+
+Input: The covariate (x), the response data (y), and the $\sigma_{\delta_i}^2$, $\sigma_{\epsilon_i}^2$, and $\sigma_{\delta_i\epsilon_o}$. 
+
+Outpout: The estimate the slope $\beta$.
+
+```{r MALS}
+options(digits = 3)
+library(RConics)
+library(mvtnorm)
+library(geigen)
+
+MALS <- function(data,sigmadelta,sigmaeps,sigmadeltaeps)
+{
+  #modified least squares
+  n <- length(data)/2;  x <- data[1:n]; y <- data[(n+1):(2*n)]
+  ti <- matrix(cbind(rep(1,n),x), ncol = 2 )  
+  h0i <- matrix(cbind(y,x*y), ncol = 2 )  
+  hi <- cbind(y,x*y-sigmadeltaeps)
+  tt <- matrix(c(1,mean(ti[,2]), mean(ti[,2] ), mean(ti[,2] * ti[,2]) ), ncol=2, nrow=2)
+  H <- matrix(c(1, mean(x), mean(x), mean(x^2-sigmadelta)), nrow = 2,ncol = 2)
+  Lambda.bar <-  tt - H
+  h.bar <- matrix(c( mean(y), mean(x * y) - mean(sigmadeltaeps) ), ncol = 1, nrow = 2)
+  v.bar <-   apply(ti*y  ,2,mean )-h.bar
+  cc0 <- y%*%ti/n;  cc1 <- matrix(c(mean(y^2), cc0), ncol =1)
+  
+  A <- matrix( cbind(cc1, rbind(cc0,H  )),nrow=3,ncol=3); A<- (A+t(A))/2
+  bb1 <- matrix(c(mean(sigmaeps),  v.bar), nrow=1, ncol=3)
+  bb2 <- matrix( c( t(v.bar), Lambda.bar) ,nrow = 2,ncol = 3)
+  
+  B <- matrix(rbind( bb1,bb2),nrow=3,ncol=3); B<- (B+t(B))/2
+  w <- solve(A)%*%B; w <- (w + t(w) ) /2
+  sols <-  geigen(  B,A,symmetric= FALSE)$values
+  if(length(sols)==0){                 return(c(NA,NA)) }
+  else
+  {
+    lambda<-  max( sols  )#%[which(sols == min(sols))]#if there are real positive solutions
+    alp<-1
+    a<- ifelse( lambda > 1+1/n, (n - alp) /n, lambda * (n - alp )/(n + 1))
+    thetahat <-  solve(tt - a * Lambda.bar) %*% matrix((  matrix(apply(h0i,2,mean),ncol=1) -  v.bar),ncol=1)  #return betahat from paper
+    return(thetahat[2] )
+  }
+}
+```
+
+## MALS Code
+
+This code to compute the slope using MCS method.
+
+Input: The covariate (x), the response data (y), and the $\sigma_{\delta_i}^2$, $\sigma_{\epsilon_i}^2$, and $\sigma_{\delta_i\epsilon_o}$. 
+
+Outpout: The estimate the slope $\beta$.
+
+```{r MCS}
+ 
+MCS  <- function(data,sigmadelta,sigmaeps,sigmadeltaeps){
+  n <- length(data)/2;  x <- data[1:n]; y <- data[(n+1):(2*n)]
+  ti <- cbind(rep(1,n),x)/sqrt(sigmaeps)    #notation is taken from paper
+  yt <- matrix(c(sum(y/sigmaeps),sum(y*x/sigmaeps)), nrow=2)
+  Mt <- t(ti)%*%ti
+  Tt  <- matrix(c(sum(1/sigmaeps),sum(x/sigmaeps),sum(x/sigmaeps),sum((x^2-sigmadelta)/sigmaeps)),nrow=2,ncol=2)
+  V  <- Mt - Tt
+  V <-  (V + t(V) )/2
+  cc1 <- matrix(c( sum(y^2/sigmaeps) , yt), ncol = 1 , nrow = 3)
+  cc2 <- matrix( rbind( t(yt), Mt), nrow = 3 , ncol = 2 )
+  A<- cbind( cc1 , cc2 )
+  A <- (A + t(A) )/2
+  B =matrix(0, nrow=3, ncol=3)
+  B[2:3,2:3] <- V
+  C <- solve(A)%*% B
+  C <- (C+t(C))/2
+  lamb0 <- (1/ eigen(C,only.values = TRUE)$values)
+  lamb <-  min( lamb0[ which(lamb0>0) ] ) 
+  a <- ifelse(lamb < 1 + 1/n,  lamb*(n-2)/(n+1) ,(n-2)/n )  
+  thetahat<-solve(Mt-a*V)%*%yt
+  
+  return( thetahat[2])
+}
+```
+
+
+## GLS Code
+This code to compute the slope using GLS method.
+
+Input: The covariate (x), the response data (y), and the $\sigma_{\delta_i}^2$, $\sigma_{\epsilon_i}^2$, and $\sigma_{\delta_i\epsilon_o}$. 
+
+Outpout: The estimate the slope $\beta$.
+
+```{r GLS}
+ 
+WLS <- function(data,sigmadelta,sigmaeps,sigmadeltaeps)#weighted least squares
+{      
+  n <- length(data)/2
+  x <- data[1:n]
+  y <- data[(n+1):(2*n)]
+  
+  xstar <- x-mean(x)
+  ystar <- y-mean(y)
+  obj <- function(B)
+  {
+    phi <- sigmadelta*B^2-2*B*sigmadeltaeps + sigmaeps
+    return(sum((ystar-B*xstar)^2/phi))
+  }
+  betahat <- optimize(f=obj,interval=c(-200,200))$minimum#same minimization as our method
+  alphahat <- mean(y)-betahat*mean(x)
+  return( betahat)
+}
+ 
+```
+
+## Our Proposed Method Code
+This code to compute the slope using our method.
+
+Input: The covariate (x), the response data (y), and the $\sigma_{\delta_i}^2$, $\sigma_{\epsilon_i}^2$, and $\sigma_{\delta_i\epsilon_o}$. 
+
+Outpout: The estimate the slope $\beta$.
+
+```{r Ours}
+ 
+Ours <- function(data, sigmadelta,sigmaeps,sigmadeltaeps)
+{
+  n <- length(data)/2
+  x <- data[1:n]
+  y <- data[(n+1):(2*n)]
+  xstar <-x-mean(x)
+  ystar <-y-mean(y)
+  
+  obj <- function(B) #objective function to minimize
+  {
+    phi <- sigmadelta*B^2-2*B*sigmadeltaeps+sigmaeps
+    return(sum(xstar^2/phi)^(-1/(n-2))*sum((ystar-B*xstar)^2/phi))
+  }
+  betahat<- optimize(f=obj,interval=c(-1,3) )$minimum 
+  alphahat<- mean(y) - betahat *mean(x)
+  
+ return( betahat )
+  
+}
+```
+
+##Generating error
+This code generates  the variances of the error
+
+Input: The $\bar{sigma}_{delta}$, the correlation coefficent $\rho$, sample size $n$, and Boolean varaiabel Cor (if error are uncorrelated use Cor=0 otherwise use Cor=F). Note that we used here $\lambda=2$. To reporduce other figures with different $\lambda$, change this one here.
+
+Outpout: The estimate the slope $\hat{\beta}$.
+
+```{r covariance}
+CovMatrixGen1 <- function(sigx.bar ,rho, n,  Cor)
+{
+  ee <-  runif(n, -1/20,1/20)
+  ee1 <- ee-mean(ee)
+  SigX <- ( matrix(1, nrow=n, ncol=1)+ee1 )*sigx.bar^2
+  lambda  <-  2 
+  SigY <-  sigx.bar^2*matrix( lambda ,nrow=n, ncol=1)
+  SigXY <-  matrix( rep(0,n), nrow=n, ncol=1)
+  if(Cor==1)
+  {
+    bb <-runif(n, -0.05,0.05)
+    bb1 <-bb-mean(bb)
+    SigXY <- (rho + matrix(bb1, nrow=n, ncol=1))*sqrt(SigY*SigX)
+  }
+  
+  Sigma <- cbind( SigX,  SigXY , SigY)
+  return(Sigma)
+}
+```
+
+## Main Code to makes figures 1-3. 
+This codes computes the MSE for the four methods and graph them. Note Cor=F; thus this mean we deal with uncorrelated errors. If $Cor=T$ this will generate the MSE for correlated errors. 
+
+
+
+
+```{r main}
+
+samp <-  5*10^4
+Cor <- F
+rho <- 0.2* Cor
+Lower <- 0;   Upper <- c(0.8,1,1,1) #lower bound and upper bound of the interval 
+
+
+a <- 0.25  # The true value of the y-intercept (alpha) 
+b <- 0.8        # The true value of the slope (beta)
+theta <- c(a,b)
+
+ns <-  c( 22,40 ,60,80 )    # sample sizes
+size <-length(ns)
+sigmas <-c(  0.005, 0.0075, 0.010, 0.025, 0.050, 0.075, 0.100, 0.125, 0.150, 0.200, 0.250, 0.300, 0.350, 0.4, 0.45, 0.5, 0.55 ,0.6,0.65,0.7,0.75,0.8)
+M <- length(sigmas)
+
+MseMM.Total  <- MseALS.Total   <- MseMALS.Total  <-  MseCS.Total  <- MseMCS.Total  <- MseWLS.Total  <- MseOurs.Total   <- c()
+
+for(i in 1:size)
+{
+  n <- ns[i]
+  MseMM  <- MseALS   <-  MseMALS   <- MseCS  <-  MseMCS   <- MseWLS   <-  MseOurs  <- c()
+  Leng <- Upper[i] - Lower
+  xi<- c()
+  xi <- seq(Lower,Upper[i], Leng/(n-1))     #true x-values   
+  Var.xi <- var(xi)
+  print(Var.xi)
+  print(n)
+  
+  for(sig in sigmas ) # these act as   
+  {
+    Sigma  <-  CovMatrixGen1( sig, rho, n,  Cor )
+  #  print( kappa <-  Var.xi/( Var.xi+sig^2) )
+    delta <- eps <- S <- c()
+    
+    for(i in 1:n)  # generate the errors
+    {
+      
+      S     <-  matrix( c( Sigma[i,1], Sigma[i,2], Sigma[i,2], Sigma[i,3] ), nrow = 2 , ncol = 2 ) 
+      temp  <- rmvnorm( samp, mean = c(0,0), S )
+      delta <- rbind( delta, temp[,1] ) 
+      eps   <- rbind( eps, temp[,2] )
+    }
+    
+    x <- matrix(xi, nrow = n, ncol = samp ) + delta # observed x
+    y <- a+ x * b + eps # observed y
+    data   <- rbind(x ,y)          
+    
+    
+    ######################################################################################
+    #   apply methods for all data of size sample: note each sample is a row in data 
+    #   The x values are the first n rows while the y values the last n rows. This will give 
+    # the MSE  for all values of sigma
+    # ######################################################################################
+    
+    ##  MALS
+    mals      <- apply(data,2, MALS, sigmadelta = Sigma[,1],sigmaeps = Sigma[,3], sigmadeltaeps = Sigma[,2] ) 
+    MseMALS <- append(MseMALS, mean((mals - theta[2] )^2   )   )
+
+    # MCS
+    mcs     <- apply(data, 2, MCS, sigmadelta = Sigma[,1],sigmaeps = Sigma[ ,3], sigmadeltaeps = Sigma[ ,2])
+    MseMCS<- append(MseMCS, mean((mcs- theta[2])^2 )   )
+
+    ##  WLS
+    wls      <- apply(data,2, WLS, sigmadelta=Sigma[,1],sigmaeps=Sigma[,3],sigmadeltaeps=Sigma[,2])
+    MseWLS <- append(MseWLS, mean((wls - theta[2])^2 )       )
+
+    # Ours
+    ours    <- apply(data,2, Ours, sigmadelta = Sigma[,1],sigmaeps = Sigma[ ,3],sigmadeltaeps = Sigma[ ,2])
+    MseOurs<- append(MseOurs, mean((ours - theta[2])^2 )  )
+
+    
+  }
+ 
+  MseMALS.Total<-rbind(MseMALS.Total,MseMALS )
+  MseMCS.Total<-rbind(MseMCS.Total,MseMCS )
+  MseWLS.Total <- rbind(MseWLS.Total, MseWLS )
+  MseOurs.Total <- rbind(MseOurs.Total,MseOurs  )
+  
+}
+```
+
+## Plotting
+```{r plotting}
+
+par(mfrow=c(2,2),mar=c(4.5,4.5,2,2),font.axis=2,cex.lab=1.9,cex.main=1.5) 
+
+plot(sigmas,MseOurs.Total[1,], main="n=20" , col="blue", lwd=3, xlim=c(min(sigmas),0.8), ylim=c(min(MseOurs.Total[1,]),1.2),  xlab = expression(paste(bold(sigma)[epsilon])), ylab=bquote(bold('MSE')),  type = "l" )
+lines(sigmas,MseWLS.Total[1,] , col="black", lwd=3)
+lines(sigmas,MseMALS.Total[1,] , col="red", lwd=3)
+lines(sigmas, MseMCS.Total[1,] , col="darkgreen",lwd=3 )
+
+legend("bottomrigh",l,legend=c(as.expression(bquote(bold("MALS"))),bquote(bold('GLS') ),bquote(bold('MCS')),bquote(bold('Proposed'))), col=c('red', 'black','darkgreen','blue'),lwd=5, cex=1,box.lty=0 )
+
+
+plot(sigmas,MseOurs.Total[2,], main="n=40" , col="blue", lwd=3, xlim=c(min(sigmas),0.8), ylim=c(min(MseOurs.Total[1,]),1.2),  xlab = expression(paste(bold(sigma)[epsilon])), ylab=bquote(bold('MSE')),  type = "l" )
+lines(sigmas,MseWLS.Total[2,] , col="black", lwd=3)
+lines(sigmas,MseMALS.Total[2,] , col="red", lwd=3)
+ lines(sigmas, MseMCS.Total[2,] , col="darkgreen",lwd=3 )
+
+
+plot(sigmas,MseOurs.Total[3,], main="n=60" , col="blue", lwd=3, xlim=c(min(sigmas),0.8), ylim=c(min(MseOurs.Total[1,]),1.2),  xlab = expression(paste(bold(sigma)[epsilon])), ylab=bquote(bold('MSE')),  type = "l" )
+lines(sigmas,MseWLS.Total[3,] , col="black", lwd=3)
+lines(sigmas,MseMALS.Total[3,] , col="red", lwd=3)
+lines(sigmas, MseMCS.Total[3,] , col="darkgreen",lwd=3 )
+
+
+plot(sigmas,MseOurs.Total[4,], main="n=80" , col="blue", lwd=3, xlim=c(min(sigmas),0.8), ylim=c(min(MseOurs.Total[1,]),1.2),  xlab = expression(paste(bold(sigma)[epsilon])), ylab=bquote(bold('MSE')),  type = "l" )
+lines(sigmas,MseWLS.Total[4,] , col="black", lwd=3)
+lines(sigmas,MseMALS.Total[4,] , col="red", lwd=3)
+lines(sigmas, MseMCS.Total[4,] , col="darkgreen",lwd=3 )
+
+```
